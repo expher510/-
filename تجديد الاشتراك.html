@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>اشتراكات FXEngine</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0B0E11; --panel:#151A21; --line:#232B35;
+    --ink:#EAEEF3; --muted:#8A97A6;
+    --up:#0ECB81; --warn:#F0B90B; --down:#F6465D;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font-family:Cairo,system-ui,sans-serif;background:var(--bg);color:var(--ink);
+    padding:16px 16px 40px;line-height:1.6;-webkit-font-smoothing:antialiased;
+  }
+  h1{font-size:19px;font-weight:800;letter-spacing:-.2px}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:18px}
+  .card{
+    background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    padding:14px;margin-bottom:10px;
+  }
+  .row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .plan{font-weight:800;font-size:16px}
+  .meta{color:var(--muted);font-size:12.5px;margin-top:2px}
+  .pill{
+    font-size:11.5px;font-weight:600;padding:3px 9px;border-radius:999px;
+    border:1px solid currentColor;white-space:nowrap;
+  }
+  .ok{color:var(--up)} .soon{color:var(--warn)} .out{color:var(--down)}
+  button{
+    font-family:inherit;font-size:14.5px;font-weight:700;border:0;border-radius:10px;
+    padding:11px 16px;cursor:pointer;transition:opacity .15s;
+  }
+  button:active{opacity:.75}
+  button:focus-visible{outline:2px solid var(--warn);outline-offset:2px}
+  .go{background:var(--warn);color:#0B0E11;width:100%;margin-top:12px}
+  .ghost{background:transparent;color:var(--muted);border:1px solid var(--line);width:100%;margin-top:8px}
+  .amount{font-size:30px;font-weight:800;letter-spacing:-.5px}
+  .amount span{font-size:14px;color:var(--muted);font-weight:600}
+  .addr{
+    background:#0B0E11;border:1px solid var(--line);border-radius:10px;padding:11px;
+    font-size:12px;word-break:break-all;direction:ltr;text-align:left;margin-top:10px;
+  }
+  input{
+    width:100%;font-family:inherit;font-size:13px;direction:ltr;text-align:left;
+    background:#0B0E11;border:1px solid var(--line);border-radius:10px;
+    padding:12px;color:var(--ink);margin-top:10px;
+  }
+  input:focus{outline:none;border-color:var(--warn)}
+  label{display:block;font-size:13px;color:var(--muted);margin-top:14px}
+  .note{font-size:12px;color:var(--muted);margin-top:10px}
+  .msg{border-radius:12px;padding:13px;margin-top:12px;font-size:13.5px;display:none}
+  .msg.err{display:block;background:rgba(246,70,93,.1);color:#FF8494;border:1px solid rgba(246,70,93,.3)}
+  .msg.good{display:block;background:rgba(14,203,129,.1);color:#5FE0AB;border:1px solid rgba(14,203,129,.3)}
+  .hint{font-size:12px;color:var(--muted);margin:16px 0 6px;font-weight:600}
+  .center{text-align:center;color:var(--muted);padding:30px 0;font-size:13.5px}
+  .hide{display:none}
+</style>
+</head>
+<body>
+
+<div id="listView">
+  <h1>اشتراكاتك</h1>
+  <p class="sub" id="hello">جاري التحميل…</p>
+  <div id="subs"></div>
+  <div id="availWrap" class="hide">
+    <p class="hint">باقات متاحة</p>
+    <div id="avail"></div>
+  </div>
+</div>
+
+<div id="payView" class="hide">
+  <h1 id="payTitle">تجديد الاشتراك</h1>
+  <p class="sub">حوّل المبلغ بالظبط على المحفظة، وبعدين الصق رقم المعاملة.</p>
+
+  <div class="card">
+    <div class="amount"><span id="payAmount">0</span> <span>USDT · TRC20</span></div>
+    <div class="addr" id="wallet"></div>
+    <button class="ghost" id="copyBtn">نسخ عنوان المحفظة</button>
+  </div>
+
+  <label for="txid">رقم المعاملة (TXID)</label>
+  <input id="txid" placeholder="7cb77e8201abef2c…" autocomplete="off" spellcheck="false">
+  <p class="note">هتلاقيه في Binance من: المحفظة ← السجل ← تفاصيل السحب.</p>
+
+  <div class="msg" id="msg"></div>
+
+  <button class="go" id="confirmBtn">تأكيد الدفع والتجديد</button>
+  <button class="ghost" id="backBtn">رجوع</button>
+</div>
+
+<script>
+const API   = 'https://n8n-p4oh.srv1867849.hstgr.cloud/webhook';
+const KEY   = 'PUT-YOUR-X-API-KEY-HERE';
+const tg    = window.Telegram?.WebApp;
+tg?.ready(); tg?.expand();
+
+const user = tg?.initDataUnsafe?.user || {};
+const TID  = String(user.id || new URLSearchParams(location.search).get('telegram_id') || '');
+
+const $ = id => document.getElementById(id);
+let cfg = {}, chosen = null;
+
+const call = async (path, opts={}) => {
+  const r = await fetch(API + path, {
+    ...opts,
+    headers: { 'Content-Type':'application/json', 'x-api-key': KEY, ...(opts.headers||{}) }
+  });
+  return r.json();
+};
+
+const badge = s => {
+  if (s.state === 'removed' || s.days_left < 0) return '<span class="pill out">منتهي</span>';
+  if (s.days_left <= 5) return `<span class="pill soon">باقي ${s.days_left} يوم</span>`;
+  return `<span class="pill ok">باقي ${s.days_left} يوم</span>`;
+};
+
+async function load(){
+  if(!TID){ $('hello').textContent = 'افتح التطبيق من بوت تليجرام عشان نعرفك.'; return; }
+  try{
+    cfg = await call('/fx/subs?telegram_id=' + encodeURIComponent(TID));
+    $('hello').textContent = user.first_name ? `أهلاً ${user.first_name} 👋` : 'أهلاً بك 👋';
+    $('wallet').textContent = cfg.wallet;
+
+    const subs = cfg.subscriptions || [];
+    $('subs').innerHTML = subs.length ? subs.map(s => `
+      <div class="card">
+        <div class="row">
+          <div>
+            <div class="plan">${s.plan}</div>
+            <div class="meta">ينتهي في ${s.expiry || '—'} · ${s.price} USDT شهرياً</div>
+          </div>
+          ${badge(s)}
+        </div>
+        <button class="go" data-plan="${s.plan}" data-price="${s.price}" data-mode="renew">تجديد الاشتراك</button>
+      </div>`).join('')
+      : '<p class="center">مفيش اشتراكات مسجلة على حسابك.</p>';
+
+    const av = cfg.available || [];
+    if(av.length){
+      $('availWrap').classList.remove('hide');
+      $('avail').innerHTML = av.map(p => `
+        <div class="card">
+          <div class="row">
+            <div><div class="plan">${p.plan}</div><div class="meta">${p.price} USDT شهرياً</div></div>
+          </div>
+          <button class="go" data-plan="${p.plan}" data-price="${p.price}" data-mode="new">اشترك الآن</button>
+        </div>`).join('');
+    }
+
+    document.querySelectorAll('button[data-plan]').forEach(b =>
+      b.onclick = () => openPay(b.dataset.plan, b.dataset.price, b.dataset.mode));
+  }catch(e){
+    $('hello').textContent = 'تعذر تحميل البيانات. حاول تاني.';
+  }
+}
+
+function openPay(plan, price, mode){
+  chosen = { plan, price };
+  $('payTitle').textContent = (mode === 'renew' ? 'تجديد ' : 'اشتراك ') + plan;
+  $('payAmount').textContent = price;
+  $('msg').className = 'msg';
+  $('txid').value = '';
+  $('listView').classList.add('hide');
+  $('payView').classList.remove('hide');
+}
+
+$('backBtn').onclick = () => {
+  $('payView').classList.add('hide');
+  $('listView').classList.remove('hide');
+};
+
+$('copyBtn').onclick = () => {
+  navigator.clipboard.writeText(cfg.wallet);
+  $('copyBtn').textContent = 'تم النسخ ✓';
+  setTimeout(() => $('copyBtn').textContent = 'نسخ عنوان المحفظة', 1600);
+};
+
+$('confirmBtn').onclick = async () => {
+  const txid = $('txid').value.trim();
+  const box = $('msg');
+  if(txid.length < 20){ box.className = 'msg err'; box.textContent = 'اكتب رقم المعاملة صحيح.'; return; }
+
+  const btn = $('confirmBtn');
+  btn.disabled = true; btn.textContent = 'بنتأكد من التحويل…';
+  box.className = 'msg';
+
+  try{
+    const res = await call('/fx/renew', {
+      method:'POST',
+      body: JSON.stringify({
+        telegram_id: TID, plan: chosen.plan, txid,
+        name: [user.first_name, user.last_name].filter(Boolean).join(' '),
+        username: user.username || ''
+      })
+    });
+
+    if(res.status === 'success'){
+      tg?.HapticFeedback?.notificationOccurred('success');
+      box.className = 'msg good';
+      box.innerHTML = `${res.message}<br>ينتهي في ${res.expiry}` +
+        (res.invite_link ? `<br><a href="${res.invite_link}" style="color:#5FE0AB">ادخل القناة من هنا</a>` : '');
+      btn.classList.add('hide');
+    }else{
+      tg?.HapticFeedback?.notificationOccurred('error');
+      box.className = 'msg err';
+      box.textContent = res.message || 'حصلت مشكلة، حاول تاني.';
+      btn.disabled = false; btn.textContent = 'تأكيد الدفع والتجديد';
+    }
+  }catch(e){
+    box.className = 'msg err';
+    box.textContent = 'الاتصال بالسيرفر فشل. حاول تاني.';
+    btn.disabled = false; btn.textContent = 'تأكيد الدفع والتجديد';
+  }
+};
+
+load();
+</script>
+</body>
+</html>
